@@ -2,7 +2,7 @@
 //extern crate gmacro;
 
 // #[derive(Default, Debug, sqlx::FromRow)]
-#[derive(Default, Debug, sqlx::FromRow, sqlxinsert::SqliteInsert)]
+/*#[derive(Default, Debug, sqlx::FromRow, sqlxinsert::SqliteInsert)]
 struct Car {
     pub car_id: i32,
     pub car_name: String,
@@ -44,3 +44,4 @@ async fn test_macro_sqlite_insert() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].car_name, "Skoda");
 }
+*/

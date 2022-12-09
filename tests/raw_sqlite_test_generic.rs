@@ -1,5 +1,5 @@
 // #[derive(Default, Debug, sqlx::FromRow)]
-#[derive(Default, Debug, sqlx::FromRow)]
+/*#[derive(Default, Debug, sqlx::FromRow)]
 struct Car {
     pub id: i32,
     pub car_name: String,
@@ -83,3 +83,4 @@ async fn test_macro_sqlite_insert_generic() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].car_name, "Skoda");
 }
+*/
