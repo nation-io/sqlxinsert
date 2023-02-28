@@ -140,6 +140,19 @@ pub fn derive_from_struct_sqlite(input: TokenStream) -> TokenStream {
 //    table: Option<String>,
 //}
 
+#[derive(Debug, Default, FromMeta)]
+#[darling(default)]
+struct Update {
+    skip: String,
+    by: String,
+}
+
+#[derive(Debug, Default, FromMeta)]
+#[darling(default)]
+struct Insert {
+    skip: String,
+}
+
 #[derive(Debug, FromDeriveInput)]
 #[darling(attributes(sqlxinsert), supports(struct_any))]
 struct Attrs {
@@ -149,8 +162,9 @@ struct Attrs {
     /// to work with types that declare generics.
     generics: syn::Generics,
     table: Option<String>,
-    update: Option<String>,
-    skip: Option<String>,
+    update: Option<Update>,
+    insert: Option<Insert>,
+    conflict: Option<String>
 }
 
 #[proc_macro_derive(PgInsert, attributes(sqlxinsert))]
@@ -159,62 +173,17 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
 
     let attrs: Attrs = Attrs::from_derive_input(&input).unwrap();
 
-    /*let table_name = input
-        .attrs
-        .iter()
-        .find_map(|a| {
-            if a.path.is_ident("sqlxinsert") {
-                if let Meta::List(l) = a.parse_meta().unwrap() {
-                    let x = l.nested.iter().filter_map(|val| {
-                        if let NestedMeta::Meta(m) = val {
-                            match m {
-                                Meta::NameValue(MetaNameValue {
-                                    path,
-                                    lit: Lit::Str(val),
-                                    ..
-                                }) if path.is_ident("table") => Some(("table", val.value())),
-                                Meta::NameValue(MetaNameValue {
-                                    path,
-                                    lit: Lit::Str(val),
-                                    ..
-                                }) if path.is_ident("update") => Some(("update", val.value())),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        }
-                    }).collect::<Vec<(String, String)>>();
-                    l.nested.iter().find_map(|val| {
-                        if let NestedMeta::Meta(m) = val {
-                            match m {
-                                Meta::NameValue(MetaNameValue {
-                                    path,
-                                    lit: Lit::Str(val),
-                                    ..
-                                }) if path.is_ident("table") => Some(val.value()),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .unwrap_or(input.ident.to_string().to_snake_case());*/
+    let comma_str_to_set = |s: String| {
+        s.split(",").map(|s| s.trim().to_string()).collect::<HashSet<_>>()
+    };
 
-    let skip = match attrs.skip {
-        None => {
-            HashSet::from(["id".into()])
-        }
-        Some(s) => {
-            //let x = s.split(",");
-            s.split(",").map(|s| s.to_string()).collect::<HashSet<String>>()
-        }
+    //let conflict: Vec<String> = s.split(",").map(|s| s.trim().to_string()).collect::<Vec<_>>();
+    let conflict = attrs.conflict.unwrap_or("id".into());
+
+    let insert_skip = if let Some(insert) = attrs.insert {
+        comma_str_to_set(insert.skip)
+    } else {
+        HashSet::from(["id".into()])
     };
 
     let table_name = attrs.table
@@ -227,20 +196,10 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
         }) => &fields.named,
         _ => panic!("expected a struct with named fields"),
     };
-    let field_name = fields
+    let insert_field_names = fields
         .iter()
         .filter_map(|field| {
-            if !skip.contains(field.ident.as_ref().unwrap().to_string().as_str()) {
-                Some(&field.ident)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    let field_name_values = fields
-        .iter()
-        .filter_map(|field| {
-            if !skip.contains(field.ident.as_ref().unwrap().to_string().as_str()) {
+            if !insert_skip.contains(field.ident.as_ref().unwrap().to_string().as_str()) {
                 Some(&field.ident)
             } else {
                 None
@@ -248,30 +207,29 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
-    let (update_col_str, is_opt) = match attrs.update {
-        None => ( "id".to_string(),  false),
-        Some(col) => {
-             let mut parts = col.splitn(2, ",").collect::<Vec<_>>();
-             if parts.len() == 2 {
-                 (parts.first().unwrap().to_string(), true)
-             } else {
-                 (parts.first().unwrap().to_string(), false)
-             }
-        }
+    let (update_by_cols, update_skip) = if let Some(update) = attrs.update {
+        (comma_str_to_set(update.by), comma_str_to_set(update.skip))
+    } else {
+        (HashSet::from(["id".into()]),  HashSet::from(["id".into()]))
     };
-    let update_col_ident = Ident::new(&update_col_str, Span::call_site());
-    let update_col = if is_opt {
+
+    let update_by_cols_idents = update_by_cols
+        .iter()
+        .map(|f| Ident::new(f, Span::call_site())).collect::<Vec<_>>();
+
+    //let update_col_ident = Ident::new(&update_col_str, Span::call_site());
+    /*let update_col = if is_opt {
         quote! { #update_col_ident.unwrap() }
     } else {
         quote! { #update_col_ident }
-    };
+    };*/
     //attrs.update.map_or(quote! { id.unwrap() }, |f| quote! { #f });
 
     let update_field_name = fields
         .iter()
         .filter_map(|field| {
-            if field.ident.as_ref().unwrap().to_string() != update_col_str &&
-                !skip.contains(field.ident.as_ref().unwrap().to_string().as_str()) {
+            if !update_by_cols.contains(field.ident.as_ref().unwrap().to_string().as_str()) &&
+                !update_skip.contains(field.ident.as_ref().unwrap().to_string().as_str()) {
                 Some(field.ident.clone().unwrap())
             } else {
                 None
@@ -280,10 +238,10 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
         .collect::<Vec<_>>();
 
     let update_field_name_len = update_field_name.len();
-    let update_dollars = dollar_values(update_field_name_len);
-    let update_vals = update_dollars.join(",");
+    /*let update_dollars = dollar_values(update_field_name_len);
+    let update_vals = update_dollars.join(",");*/
 
-    let field_length = field_name.len();
+    let field_length = insert_field_names.len();
     // struct Car { id: i32, name: String }
     // -> ( $1,$2 )
     let vals = dollar_values(field_length);
@@ -299,7 +257,21 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
         .map(|(i, s)| format!("{}=${}", s.to_string(), i + 1))
         .collect::<Vec<_>>()
         .join(",");
+
+    let upsert_field_names = update_field_name
+        .iter()
+        .enumerate()
+        .map(|(i, s)| format!("{}=${}", s.to_string(), insert_field_names.len() + i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
     //panic!(x);
+
+    let update_by_fields_str = update_by_cols
+        .iter()
+        .enumerate()
+        .map(|(i, s)| format!("{}=${}", s.to_string(), update_field_name.len() + i+1))
+        .collect::<Vec<_>>()
+        .join(" AND ");
 
     // struct Car ...
     // -> Car
@@ -310,21 +282,11 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
     let columns = format!(
         "{}",
         quote! {
-            #( #field_name ),*
+            #( #insert_field_names ),*
         }
     );
 
-    /*let x = quote! {
-        #( #field_name = #vals1 ),*
-    };
-
-    println!("{}", x);*/
-    //let col_val = format!("{}", );
-
-    //println!("{}", col_val);
-    //println!("{}", x);
-
-    let update_col_str = update_col.to_string();
+    //let update_col_str = update_col.to_string();
 
     let out = quote! {
         #[async_trait::async_trait]
@@ -336,10 +298,30 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
             where
                 E: sqlx::Executor<'e, Database = sqlx::Postgres>
             {
-                let sql = format!("insert into {} ( {} ) values ( {} ) returning *", Self::TABLE_NAME, #columns, #values); // self.value_list()); //self.values );
+                let sql = format!("insert into {} ( {} ) values ( {} ) returning *", Self::TABLE_NAME, #columns, #values);
                 let res: Self = sqlx::query_as::<_,Self>(&sql)
                 #(
-                    .bind(&self.#field_name_values)
+                    .bind(&self.#insert_field_names)
+                )*
+                    .fetch_one(pool)
+                    .await?;
+
+                Ok(res)
+            }
+
+            async fn upsert<'e, E>(&self, pool: E) -> eyre::Result<Self>
+            where
+                E: sqlx::Executor<'e, Database = sqlx::Postgres>
+            {
+                let update = format!("update set {}", #upsert_field_names); // self.value_list()); //self.values );
+                let sql = format!("insert into {} ( {} ) values ( {} ) on conflict ({}) do {} returning *", Self::TABLE_NAME, #columns, #values, #conflict, update);
+                info!("upsert bind {:?}", self);
+                let res: Self = sqlx::query_as::<_,Self>(&sql)
+                #(
+                    .bind(&self.#insert_field_names)
+                )*
+                #(
+                    .bind(&self.#update_field_name)
                 )*
                     .fetch_one(pool)
                     .await?;
@@ -351,12 +333,14 @@ pub fn derive_from_struct_psql(input: TokenStream) -> TokenStream {
             where
                 E: sqlx::Executor<'e, Database = sqlx::Postgres>
             {
-                let sql = format!("update {} set {} where {} = ${} returning *", Self::TABLE_NAME, #update_field_values, #update_col_str, #update_field_name_len + 1); // self.value_list()); //self.values );
+                let sql = format!("update {} set {} where {} returning *", Self::TABLE_NAME, #update_field_values, #update_by_fields_str); // self.value_list()); //self.values );
                 let res: Self = sqlx::query_as::<_,Self>(&sql)
                 #(
                     .bind(&self.#update_field_name)
                 )*
-                    .bind(&self.#update_col)
+                #(
+                    .bind(&self.#update_by_cols_idents)
+                )*
                     .fetch_one(pool)
                     .await?;
 

@@ -24,10 +24,15 @@ trait DBOps: Send +  Unpin + Sized {
     async fn update<'e, E>(&self, pool: E) -> eyre::Result<Self>
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>;
+
+    async fn upsert<'e, E>(&self, pool: E) -> eyre::Result<Self>
+        where
+            E: sqlx::Executor<'e, Database = sqlx::Postgres>;
 }
 
+
 #[derive(Default, Debug, sqlx::FromRow, sqlxinsert::PgInsert)]
-#[sqlxinsert(table="car", update="name")]
+#[sqlxinsert(table="car", update(by="name,id"), conflict="name")]
 struct CreateCar {
     pub id: Option<i32>,
     pub name: String,
@@ -75,6 +80,8 @@ async fn test_macro_insert() {
         .await
         .expect("Not possible to insert into dabase");
     assert_eq!(car_skoda_res.name, car_skoda.name);
+
+    let car_skoda_upsert = car_skoda.upsert(&pool).await.expect("");
 
     let car_tesla_res = car_tesla
         .insert(&pool)
